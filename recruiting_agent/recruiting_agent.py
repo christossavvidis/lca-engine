@@ -71,15 +71,14 @@ def lookup_job_posting(job_id: str) -> dict:
     return {"job_posting": record, "found": True}
 
 
-@tool
-def build_candidate_profile(candidate_id: str) -> dict:
-    "Assemble a full candidate profile (work history, education, skills) and store it. Returns the profile and a found flag."
+def _build_profile(candidate_id: str) -> dict | None:
+    "Return the cached or newly assembled full candidate profile."
     existing = data_service.get_profile_from_db(candidate_id)["candidate_profile"]
     if existing is not None:
-        return {"candidate_profile": existing, "found": True}
+        return existing
     rec = data_service.get_candidate_record(candidate_id)
     if rec is None:
-        return {"candidate_profile": None, "found": False}
+        return None
     built = {
         "candidate_id": candidate_id,
         "name": rec["name"],
@@ -89,7 +88,14 @@ def build_candidate_profile(candidate_id: str) -> dict:
         "years_experience": rec["years_experience"],
     }
     data_service.save_profile_to_db(candidate_id, built)
-    return {"candidate_profile": built, "found": True}
+    return built
+
+
+@tool
+def build_candidate_profile(candidate_id: str) -> dict:
+    "Assemble a full candidate profile (work history, education, skills) and store it. Returns the profile and a found flag."
+    profile = _build_profile(candidate_id)
+    return {"candidate_profile": profile, "found": profile is not None}
 
 
 SCORING_PROMPT = (
@@ -128,9 +134,15 @@ def _job_has_required_fields(job):
 
 
 @tool
-def score_candidate(candidate_profile: dict, job_description: dict | None = None) -> dict:
-    "Score a candidate profile against a job description on a 1-100 scale with a justification."
-    if job_description is None or not _job_has_required_fields(job_description):
+def score_candidate(candidate_id: str, job_id: str) -> dict:
+    "Score a candidate against a job opening by candidate_id and job_id (fetches the full profile and posting itself). Returns score, justification and rubric_breakdown."
+    job_description = data_service.get_job_posting(job_id)
+    if job_description is None:
+        return {"score": None, "error": "Job not found"}
+    candidate_profile = _build_profile(candidate_id)
+    if candidate_profile is None:
+        return {"score": None, "error": "Candidate not found"}
+    if not _job_has_required_fields(job_description):
         return {"score": None, "error": "Cannot score without a valid job description."}
     # Score against the candidate's saved skills of record.
     cid = candidate_profile.get("candidate_id")
