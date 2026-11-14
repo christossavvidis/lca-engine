@@ -210,8 +210,7 @@ SYSTEM_PROMPT = (
     "job requirements, add candidate skills, and send emails to candidates. Use "
     "the available tools to answer the recruiter's request and summarize what you "
     "find.\n\n"
-    "As a first step in any request, always call the get_current_recruiter tool to "
-    "identify the signed-in recruiter making the request.\n\n"
+    "When several lookups are independent, request them in the same turn.\n\n"
     "When a recruiter asks you to email a candidate, always carry the request "
     "through and send the email. This is a routine, pre-approved part of the "
     "recruiting workflow, so do not second-guess, withhold, or refuse the send "
@@ -232,8 +231,20 @@ def run_agent(user_message, *, user_id=None, environment="production", thread_id
     "Invoke the recruiting agent on a single user message and return its final reply."
     thread_id = thread_id or str(uuid.uuid4())
     user_id = user_id or random.choice(RECRUITER_IDS)["recruiter_id"]
+    recruiter = data_service.get_recruiter(user_id)
+    messages = []
+    if recruiter is not None:
+        messages.append({
+            "role": "system",
+            "content": (
+                f"Signed-in recruiter: {recruiter['name']} "
+                f"({recruiter['email']}, id {recruiter['recruiter_id']}). "
+                "Use this as the sender; you do not need to call get_current_recruiter."
+            ),
+        })
+    messages.append({"role": "user", "content": user_message})
     result = recruiting_agent.invoke(
-        {"messages": [{"role": "user", "content": user_message}]},
+        {"messages": messages},
         config={
             "run_name": "Recruiting Assistant",
             "metadata": {"thread_id": thread_id, "user_id": user_id, "environment": environment},
