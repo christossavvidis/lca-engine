@@ -25,7 +25,7 @@ load_dotenv(override=True)
 # Enable LangSmith tracing; project / API key come from the environment or .env.
 os.environ.setdefault("LANGSMITH_TRACING", "true")
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
@@ -93,9 +93,10 @@ def build_candidate_profile(candidate_id: str) -> dict:
 
 
 SCORING_PROMPT = (
-    "You are a recruiting assistant. Score the candidate against the job from "
-    "1 to 100 based on how good a fit they are, weighing their experience and "
-    "skills. In your justification, explicitly list which of the job's required "
+    "You are a recruiting assistant. Score the candidate against the job using "
+    "experience (0-30), skills_match (0-50), and seniority_fit (0-20). The overall "
+    "score is the sum of these three components, from 0 to 100. "
+    "In your justification, explicitly list which of the job's required "
     "skills the candidate has and which required skills they are missing, naming "
     "each one. Any missing required skill must lower the skills_match component and "
     "the overall score. Return a score and a justification that reflects your "
@@ -105,10 +106,12 @@ SCORING_PROMPT = (
 from typing import Literal
 
 class RubricBreakdown(BaseModel):
-    experience: float
-    skills_match: float
-    seniority_fit: float
-    component_max: Literal[100] = 100
+    experience: float = Field(ge=0, le=30)
+    skills_match: float = Field(ge=0, le=50)
+    seniority_fit: float = Field(ge=0, le=20)
+    experience_max: Literal[30] = 30
+    skills_match_max: Literal[50] = 50
+    seniority_fit_max: Literal[20] = 20
 
 
 class CandidateScore(BaseModel):
@@ -129,7 +132,7 @@ def _job_has_required_fields(job):
 
 @tool
 def score_candidate(candidate_profile: dict, job_description: dict | None = None) -> dict:
-    "Score a candidate profile against a job description on a 1-100 scale with a justification."
+    "Score a candidate profile against a job description on a 0-100 scale with a justification."
     if job_description is None or not _job_has_required_fields(job_description):
         return {"score": None, "error": "Cannot score without a valid job description."}
     # Score against the candidate's saved skills of record.
@@ -144,6 +147,11 @@ def score_candidate(candidate_profile: dict, job_description: dict | None = None
         {"role": "system", "content": SCORING_PROMPT},
         {"role": "user", "content": user},
     ])
+    breakdown = result.rubric_breakdown
+    breakdown.experience = max(0, min(breakdown.experience, 30))
+    breakdown.skills_match = max(0, min(breakdown.skills_match, 50))
+    breakdown.seniority_fit = max(0, min(breakdown.seniority_fit, 20))
+    result.score = breakdown.experience + breakdown.skills_match + breakdown.seniority_fit
     return result.model_dump()
 
 
@@ -219,7 +227,8 @@ SYSTEM_PROMPT = (
     "look up job postings, build candidate profiles, score candidates against "
     "job requirements, add candidate skills, and send emails to candidates. Use "
     "the available tools to answer the recruiter's request and summarize what you "
-    "find.\n\n"
+    "find. When reporting a score breakdown, use the component values and maxima "
+    "exactly as returned by score_candidate.\n\n"
     "As a first step in any request, always call the get_current_recruiter tool to "
     "identify the signed-in recruiter making the request.\n\n"
     "Before emailing, retrieve the candidate with get_candidate and retain "
